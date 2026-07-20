@@ -33,6 +33,7 @@ pub use self::handle::SubDeviceGroupHandle;
 pub use self::tx_rx_response::TxRxResponse;
 
 static GROUP_ID: AtomicUsize = AtomicUsize::new(0);
+static mut integral : i64 = 0;
 
 /// The size of a DC sync PDU.
 const DC_PDU_SIZE: usize = CreatedFrame::PDU_OVERHEAD_BYTES + u64::PACKED_LEN;
@@ -168,6 +169,7 @@ pub struct CycleInfo {
     /// The difference between the SYNC0 pulse and when the current cycle's data was received by the
     /// DC reference SubDevice.
     pub cycle_start_offset: Duration,
+    pub next_cycle_sub: bool,
 }
 
 /// A group of one or more EtherCAT SubDevices.
@@ -1229,19 +1231,25 @@ where
     /// }
     /// # }) }
     /// ```
+
+    pub fn calc_time_offset(&self,reftime : u64, cycletime : u64,syncoffset : u64) -> i64 {
+        let mut delta : i64 = (reftime - syncoffset) as i64 % cycletime as i64;
+        if delta > (cycletime as i64 / 2)
+        {
+            delta = delta - cycletime as i64;
+        }
+        let timeerror = -delta;
+        unsafe {
+            integral += timeerror;
+            ((timeerror as f64 * 0.015) + (integral as f64 * 0.00003)) as i64
+        }        
+    }
+
     pub async fn tx_rx_dc<'sto>(
         &self,
         maindevice: &'sto MainDevice<'sto>,
     ) -> Result<TxRxResponse<MAX_SUBDEVICES, CycleInfo>, Error> {
-        fmt::trace!(
-            "Group TX/RX with DC sync, start address {:#010x}, data len {}, of which read bytes: {}",
-            self.inner().pdi_start.start_address,
-            self.pdi_len,
-            self.read_pdi_len
-        );
-
         let mut pdi_lock = self.pdi.write();
-
         let mut total_bytes_sent = 0;
         let mut time = 0;
         let mut lrw_wkc_sum = 0;
@@ -1261,10 +1269,6 @@ where
                     0u64,
                     None,
                 )?;
-
-                // Just double checking
-                debug_assert_eq!(dc_handle.alloc_size, DC_PDU_SIZE);
-
                 Some(dc_handle)
             } else {
                 None
@@ -1276,7 +1280,6 @@ where
 
             let pushed_chunk = if !chunk.is_empty() {
                 let start_addr = self.inner().pdi_start.start_address + total_bytes_sent as u32;
-
                 frame.push_pdu_slice_rest(Command::lrw(start_addr).into(), chunk)?
             } else {
                 None
@@ -1341,18 +1344,22 @@ where
                 break;
             }
         }
-        // Nanoseconds from the start of the cycle. This works because the first SYNC0 pulse
-        // time is rounded to a whole number of `sync0_period`-length cycles.
-        let cycle_start_offset = time % maindevice.config.cycle_time;
-        let time_to_next_iter =
-            (maindevice.config.cycle_time - cycle_start_offset);
+
+        let time_to_next_iter = self.calc_time_offset(time,maindevice.config.cycle_time.as_nanos().try_into().unwrap(), maindevice.config.cycle_offset.as_nanos().try_into().unwrap());
+        let next_cycle_subtract = if (time_to_next_iter < 0) {
+            true
+        }else{
+            false
+        };
+        
         Ok(TxRxResponse {
             working_counter: lrw_wkc_sum,
             subdevice_states,
             extra: CycleInfo {
                 dc_system_time: time,
-                cycle_start_offset: Duration::from_nanos(cycle_start_offset),
-                next_cycle_wait: Duration::from_nanos(time_to_next_iter),
+                cycle_start_offset: Duration::from_nanos(0),
+                next_cycle_wait:Duration::from_nanos(time_to_next_iter.abs() as u64),
+                next_cycle_sub: next_cycle_subtract
             },
         })
     }

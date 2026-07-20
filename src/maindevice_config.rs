@@ -1,6 +1,7 @@
 //! Configuration passed to [`MainDevice`](crate::MainDevice).
 
 /// Configuration passed to [`MainDevice`](crate::MainDevice).
+use std::time::Duration;
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct MainDeviceConfig {
     /// The number of `FRMW` packets to send during the static phase of Distributed Clocks (DC)
@@ -10,7 +11,8 @@ pub struct MainDeviceConfig {
     ///
     /// If this is set to zero, no static sync will be performed.
     pub dc_static_sync_iterations: u32,
-    pub cycle_time : u64,
+    pub cycle_time : Duration,
+    pub cycle_offset : Duration,
     /// EtherCAT packet (PDU) network retry behaviour.
     pub retry_behaviour: RetryBehaviour,
 }
@@ -19,7 +21,8 @@ impl Default for MainDeviceConfig {
     fn default() -> Self {
         Self {
             dc_static_sync_iterations: 10_000,
-            cycle_time: 1000,
+            cycle_time: Duration::from_micros(1000),
+            cycle_offset: Duration::from_micros(500),
             retry_behaviour: RetryBehaviour::default(),
         }
     }
