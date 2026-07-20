@@ -10,7 +10,7 @@ pub struct MainDeviceConfig {
     ///
     /// If this is set to zero, no static sync will be performed.
     pub dc_static_sync_iterations: u32,
-
+    pub cycle_time : u64,
     /// EtherCAT packet (PDU) network retry behaviour.
     pub retry_behaviour: RetryBehaviour,
 }
@@ -19,6 +19,7 @@ impl Default for MainDeviceConfig {
     fn default() -> Self {
         Self {
             dc_static_sync_iterations: 10_000,
+            cycle_time: 1000,
             retry_behaviour: RetryBehaviour::default(),
         }
     }
