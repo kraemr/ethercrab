@@ -1343,9 +1343,9 @@ where
         }
         // Nanoseconds from the start of the cycle. This works because the first SYNC0 pulse
         // time is rounded to a whole number of `sync0_period`-length cycles.
-        let cycle_start_offset = time % self.cycle_time;
+        let cycle_start_offset = time % maindevice.config.cycle_time;
         let time_to_next_iter =
-            (self.cycle_time - cycle_start_offset);
+            (maindevice.cycle_time - cycle_start_offset);
         Ok(TxRxResponse {
             working_counter: lrw_wkc_sum,
             subdevice_states,
