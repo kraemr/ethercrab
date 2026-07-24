@@ -436,9 +436,9 @@ where
                 let sync1_with_offset_ns = ((sync1_period_ns / sync0_period) + 1) * sync0_period;
                 
                 let start_time = if sync1_period_ns > 0 {
-                    ((system_time + first_pulse_delay) / sync1_with_offset_ns) * sync1_with_offset_ns + sync1_with_offset_ns
+                    ((system_time + first_pulse_delay) / sync1_with_offset_ns) * sync1_with_offset_ns + sync1_with_offset_ns + sync0_shift.as_nanos() as u64
                 }else{
-                    system_time + first_pulse_delay
+                    system_time + first_pulse_delay + sync0_shift.as_nanos() as u64
                 };
                 println!(
                     "--> Configuring SubDevice {:#06x} {} DC mode {} sync0: {} sync1: {} true sync1: {} start time: {}",
