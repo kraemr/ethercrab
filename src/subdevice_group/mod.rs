@@ -427,46 +427,79 @@ where
         let first_pulse_delay = u64::from(u32::try_from(start_delay.as_nanos())?);
 
         for subdevice in dc_devices {
-            fmt::debug!(
-                "--> Configuring SubDevice {:#06x} {} DC mode {}",
-                subdevice.configured_address(),
-                subdevice.name(),
-                subdevice.dc_sync()
-            );
-
-            // Disable cyclic op, ignore WKC
-            subdevice
-                .write(RegisterAddress::DcSyncActive)
-                .ignore_wkc()
-                .send(maindevice, 0u8)
-                .await?;
-
-            // Round first pulse time to a whole number of cycles
-            let start_time = (system_time + first_pulse_delay) / sync0_period * sync0_period;
-
-            fmt::debug!("--> Computed DC sync start time: {}", start_time);
-
-            subdevice
-                .write(RegisterAddress::DcSyncStartTime)
-                .send(maindevice, start_time)
-                .await?;
-
-            // Cycle time in nanoseconds
-            subdevice
-                .write(RegisterAddress::DcSync0CycleTime)
-                .send(maindevice, sync0_period)
-                .await?;
-
             let flags = if let DcSync::Sync01 { sync1_period } = subdevice.dc_sync() {
-                let sync1_period = u64::try_from(sync1_period.as_nanos())?;
+                // Sync1 needs some different calculations ... 
+                let sync1_period_ns = u64::try_from(sync1_period.as_nanos())?;
+                // With a Sync1 of 1000us cycle time 1000us and sync0 = 125 (8 sync0 per "cycle")
+                // Result would be 1125us offsetting sync1 as to not hit at the same time as sync0
+                // Keep in mind that this will not be written as the cycle-time!! this is only a timing offset
+                let sync1_with_offset_ns = ((sync1_period_ns / sync0_period) + 1) * sync0_period;
+                
+                let start_time = if sync1_period_ns > 0 {
+                    ((system_time + first_pulse_delay) / sync1_with_offset_ns) * sync1_with_offset_ns + sync1_with_offset_ns
+                }else{
+                    system_time + first_pulse_delay
+                };
+                println!(
+                    "--> Configuring SubDevice {:#06x} {} DC mode {} sync0: {} sync1: {} true sync1: {} start time: {}",
+                    subdevice.configured_address(),
+                    subdevice.name(),
+                    subdevice.dc_sync(),
+                    sync0_period,
+                    sync1_period_ns,
+                    sync1_with_offset_ns,
+                    start_time
+                );
+
+
+                subdevice
+                    .write(RegisterAddress::DcSyncActive)
+                    .ignore_wkc()
+                    .send(maindevice, 0u8)
+                    .await?;
+                // Round first pulse time to a whole number of cycles
+                subdevice
+                    .write(RegisterAddress::DcSyncStartTime)
+                    .send(maindevice, start_time)
+                    .await?;
+
+                // Cycle time in nanoseconds
+                subdevice
+                    .write(RegisterAddress::DcSync0CycleTime)
+                    .send(maindevice, sync0_period)
+                    .await?;
 
                 subdevice
                     .write(RegisterAddress::DcSync1CycleTime)
-                    .send(maindevice, sync1_period)
+                    .send(maindevice, sync1_period_ns)
                     .await?;
 
                 SYNC1_ACTIVATE | SYNC0_ACTIVATE | CYCLIC_OP_ENABLE
             } else {
+                // Sync0 works fine this way
+                // Disable cyclic op, ignore WKC
+                subdevice
+                    .write(RegisterAddress::DcSyncActive)
+                    .ignore_wkc()
+                    .send(maindevice, 0u8)
+                    .await?;
+
+                // Round first pulse time to a whole number of cycles
+                let start_time = (system_time + first_pulse_delay) / sync0_period * sync0_period;
+
+                fmt::debug!("--> Computed DC sync start time: {}", start_time);
+
+                subdevice
+                    .write(RegisterAddress::DcSyncStartTime)
+                    .send(maindevice, start_time)
+                    .await?;
+
+                // Cycle time in nanoseconds
+                subdevice
+                    .write(RegisterAddress::DcSync0CycleTime)
+                    .send(maindevice, sync0_period)
+                    .await?;
+
                 SYNC0_ACTIVATE | CYCLIC_OP_ENABLE
             };
 
