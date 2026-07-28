@@ -87,8 +87,13 @@ pub struct SubDevice {
     pub(crate) dc_sync: DcSync,
 
     /// Oversampling config, a list of tuples of `(PDO, oversampling multipler)`.
-    pub(crate) oversampling_config: &'static [(u16, u16)],
+    pub(crate) oversampling_config: [(u16, u16); 32],
+
+    /// Oversampling config, a list of tuples of `(PDO, oversampling multipler)`.
+    pub(crate) oversampling_count: usize,
 }
+
+    
 
 // Only required for tests, also doesn't make much sense - consumers of EtherCrab should be
 // comparing e.g. `subdevice.identity()`, names, configured address or something other than the whole
@@ -131,7 +136,8 @@ impl Clone for SubDevice {
             propagation_delay: self.propagation_delay,
             dc_sync: self.dc_sync,
             mailbox_counter: AtomicU8::new(self.mailbox_counter.load(Ordering::Acquire)),
-            oversampling_config: &[],
+            oversampling_config: [(0u16,0u16);32],
+            oversampling_count: 0,
         }
     }
 }
@@ -230,7 +236,8 @@ impl SubDevice {
             dc_sync: DcSync::Disabled,
             // 0 is a reserved value, so we initialise the cycle at 1. The cycle repeats 1 - 7.
             mailbox_counter: AtomicU8::new(1),
-            oversampling_config: &[],
+            oversampling_config: [(0u16,0u16);32],
+            oversampling_count: 0,
         })
     }
 
@@ -250,8 +257,10 @@ impl SubDevice {
     ///
     /// This is a temporary(ish) solution to configure oversampling until a better one is found to
     /// configure SubDevices from ESI files, etc.
-    pub fn set_oversampling(&mut self, oversampling_config: &'static [(u16, u16)]) {
-        self.oversampling_config = oversampling_config
+    pub fn set_oversampling(&mut self, oversampling_config: &[(u16, u16)] ) {        
+        let count = oversampling_config.len().min(self.oversampling_config.len());
+        self.oversampling_config[..count].copy_from_slice(&oversampling_config[..count]);    
+        self.oversampling_count = count;        
     }
 
     /// Get the SubDevice's human readable short name.
