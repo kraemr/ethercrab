@@ -440,7 +440,7 @@ where
                 }else{
                     system_time + first_pulse_delay + sync0_shift.as_nanos() as u64
                 };
-                println!(
+                fmt::debug!(
                     "--> Configuring SubDevice {:#06x} {} DC mode {} sync0: {} sync1: {} true sync1: {} start time: {}",
                     subdevice.configured_address(),
                     subdevice.name(),
@@ -487,7 +487,14 @@ where
                 // Round first pulse time to a whole number of cycles
                 let start_time = (system_time + first_pulse_delay) / sync0_period * sync0_period;
 
-                fmt::debug!("--> Computed DC sync start time: {}", start_time);
+                fmt::debug!(
+                    "--> Configuring SubDevice {:#06x} {} DC mode {} sync0: {} start time: {}",
+                    subdevice.configured_address(),
+                    subdevice.name(),
+                    subdevice.dc_sync(),
+                    sync0_period,
+                    start_time
+                );
 
                 subdevice
                     .write(RegisterAddress::DcSyncStartTime)
