@@ -12,7 +12,7 @@ pub struct MainDeviceConfig {
     pub dc_static_sync_iterations: u32,
 
     /// EtherCAT packet (PDU) network retry behaviour.
-    pub retry_behaviour: RetryBehaviour,
+    pub retry_behaviour: RetryBehaviour,    
 }
 
 impl Default for MainDeviceConfig {

@@ -105,8 +105,16 @@ pub struct NoDc;
 /// This typestate can be entered by calling [`SubDeviceGroup::configure_dc_sync`].
 #[derive(Copy, Clone, Debug)]
 pub struct HasDc {
+    
     sync0_period: u64,
+    
     sync0_shift: u64,
+    
+    /// Proportional gain for the DC PI loop
+    dc_pgain : f64,
+    
+    /// Integral gain for the DC PI loop
+    dc_igain : f64,
     /// Configured address of the DC reference SubDevice.
     reference: u16,
 }
@@ -149,6 +157,12 @@ pub struct DcConfiguration {
 
     /// Shift time relative to SYNC0 pulse.
     pub sync0_shift: Duration,
+    
+    /// Proportional gain for the DC PI loop
+    pub dc_pgain : f64,
+    
+    /// Integral gain for the DC PI loop
+    pub dc_igain : f64,
 }
 
 /// Information useful to a process data cycle.
@@ -190,6 +204,8 @@ pub struct SubDeviceGroup<
     pdi_len: usize,
     inner: MySyncUnsafeCell<GroupInner<MAX_SUBDEVICES>>,
     dc_conf: DC,
+    dc_integral: RwLock<R,f64>,
+    cycle_time: Duration,
     _state: PhantomData<S>,
 }
 
@@ -315,6 +331,8 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, DC>
             inner: self.inner,
             dc_conf: self.dc_conf,
             _state: PhantomData,
+            cycle_time: self.cycle_time,
+            dc_integral: self.dc_integral,
         })
     }
 
@@ -386,6 +404,7 @@ where
         self,
         maindevice: &MainDevice<'_>,
         dc_conf: DcConfiguration,
+        cycle_time: Duration,
     ) -> Result<SubDeviceGroup<MAX_SUBDEVICES, MAX_PDI, R, PreOpPdi, HasDc>, Error> {
         fmt::debug!("Configuring distributed clocks for group");
 
@@ -398,7 +417,9 @@ where
         let DcConfiguration {
             start_delay,
             sync0_period,
-            sync0_shift,
+            sync0_shift, 
+            dc_pgain, 
+            dc_igain 
         } = dc_conf;
 
         // Coerce generics into concrete `PreOp` type as we don't need the PDI to configure the DC.
@@ -410,6 +431,8 @@ where
             inner: self.inner,
             dc_conf: NoDc,
             _state: PhantomData::<PreOp>,
+            cycle_time: self.cycle_time,
+            dc_integral: self.dc_integral,
         };
 
         // Only configure DC for those devices that want and support it
@@ -420,10 +443,8 @@ where
         let system_time = SubDeviceRef::new(maindevice, reference, ())
             .register_read::<u64>(RegisterAddress::DcSystemTime)
             .await?;
-
         // Kinda weird converting to/from u32 but these values must not exceed u32::MAX
         let sync0_period = u64::from(u32::try_from(sync0_period.as_nanos())?);
-
         let first_pulse_delay = u64::from(u32::try_from(start_delay.as_nanos())?);
 
         for subdevice in dc_devices {
@@ -440,6 +461,7 @@ where
                 }else{
                     system_time + first_pulse_delay + sync0_shift.as_nanos() as u64
                 };
+
                 fmt::debug!(
                     "--> Configuring SubDevice {:#06x} {} DC mode {} sync0: {} sync1: {} true sync1: {} start time: {}",
                     subdevice.configured_address(),
@@ -476,7 +498,6 @@ where
 
                 SYNC1_ACTIVATE | SYNC0_ACTIVATE | CYCLIC_OP_ENABLE
             } else {
-                // Sync0 works fine this way
                 // Disable cyclic op, ignore WKC
                 subdevice
                     .write(RegisterAddress::DcSyncActive)
@@ -526,8 +547,12 @@ where
                 sync0_period: sync0_period,
                 sync0_shift: sync0_shift.as_nanos() as u64,
                 reference,
+                dc_pgain,
+                dc_igain,
             },
             _state: PhantomData,
+            cycle_time,
+            dc_integral: self_.dc_integral,
         })
     }
 }
@@ -627,6 +652,8 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, DC>
             inner: self.inner,
             dc_conf: self.dc_conf,
             _state: PhantomData,
+            cycle_time: self.cycle_time,
+            dc_integral: self.dc_integral,
         })
     }
 }
@@ -655,6 +682,8 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, S> Default
             inner: MySyncUnsafeCell::new(GroupInner::default()),
             dc_conf: NoDc,
             _state: PhantomData,
+            cycle_time: Duration::from_micros(5000),
+            dc_integral: RwLock::new(0.0),
         }
     }
 }
@@ -780,6 +809,8 @@ impl<const MAX_SUBDEVICES: usize, const MAX_PDI: usize, R: RawRwLock, S, DC>
             inner: self.inner,
             dc_conf: self.dc_conf,
             _state: PhantomData,
+            cycle_time: self.cycle_time,
+            dc_integral: self.dc_integral,
         })
     }
 }
@@ -1381,26 +1412,40 @@ where
                 break;
             }
         }
-
-        // Nanoseconds from the start of the cycle. This works because the first SYNC0 pulse
-        // time is rounded to a whole number of `sync0_period`-length cycles.
-        let cycle_start_offset = time % self.dc_conf.sync0_period;
-
-        let time_to_next_iter =
-            (self.dc_conf.sync0_period - cycle_start_offset) + self.dc_conf.sync0_shift;
+        
+        let mut dc_integral_guard = self.dc_integral.write();
+        let cycle_time_ns = self.cycle_time.as_nanos() as u64;
+        let offsettime = calc_dc_offsettime(cycle_time_ns as i64,time,cycle_time_ns / 2, &mut dc_integral_guard ,self.dc_conf.dc_igain,self.dc_conf.dc_pgain);
+        let clamped_offsettime = offsettime.clamp(cycle_time_ns as i64 *-1,cycle_time_ns as i64);
+        let next_cycle_wait = Duration::from_nanos( (cycle_time_ns as i64 + clamped_offsettime) as u64 );
+        drop(dc_integral_guard);
 
         Ok(TxRxResponse {
             working_counter: lrw_wkc_sum,
             subdevice_states,
             extra: CycleInfo {
                 dc_system_time: time,
-                cycle_start_offset: Duration::from_nanos(cycle_start_offset),
-                next_cycle_wait: Duration::from_nanos(time_to_next_iter),
+                cycle_start_offset: Duration::from_nanos(0),
+                next_cycle_wait,
             },
         })
     }
 }
 
+
+fn calc_dc_offsettime(cycle_time_ns: i64, dc_sys_time_ns : u64, sync_offset_ns : u64, integral : &mut f64, igain : f64, pgain : f64) -> i64{
+    let mut delta = (dc_sys_time_ns - sync_offset_ns) as i64 % cycle_time_ns;
+    // /2 Due to weirdness with modulo
+    if delta > (cycle_time_ns / 2) {
+        delta = delta - cycle_time_ns
+    }
+    let error = -delta;
+    // Not sure what to clamp to, if at all Clamping seemed to have a negative effect? so just keep it as is
+    (*integral) = (*integral) + error as f64; //.clamp(sync_offset_ns as i64*-1 * 10, sync_offset_ns as i64 * 10);
+    // Maybe instead it makes sense to clamp offsettime?
+    ((error as f64 * pgain) + ((*integral) * igain)) as i64
+}
+    
 #[cfg(test)]
 mod tests {
     use super::*;

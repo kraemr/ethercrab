@@ -208,6 +208,7 @@ fn main() -> Result<(), Error> {
                     // Send process data half way through cycle
                     sync0_shift: TICK_INTERVAL / 2,
                 },
+                TICK_INTERVAL,
             )
             .await?;
 
